@@ -52,10 +52,26 @@ async function run() {
     // donation related api
 
     app.get('/donationRequests', async (req, res) => {
-      console.log('inside verify token', req.headers);
-      const result = await requestsCollection.find().toArray();
-      res.send(result);
+      try {
+        const userEmail = req.query.userEmail;
+
+        // Fetch all donation requests if userEmail is not provided
+        const query = userEmail ? { requesterEmail: userEmail } : {};
+
+        // Fetch donation requests based on the query
+        const result = await requestsCollection.find(query).toArray();
+
+        console.log('Donation requests:', result);
+        res.send(result);
+      } catch (error) {
+        console.error('Error fetching donation requests:', error);
+        res.status(500).send('Internal Server Error');
+      }
     });
+
+
+
+
 
     app.delete('/donationRequests/:id', async (req, res) => {
       const id = req.params.id;
@@ -63,6 +79,44 @@ async function run() {
       const result = await requestsCollection.deleteOne(query);
       res.send(result);
     })
+
+    app.put('/donationRequests/:id/status', async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { newStatus } = req.body;
+
+        const query = { _id: new ObjectId(id) };
+        const update = { $set: { donationStatus: newStatus } };
+
+        const result = await requestsCollection.updateOne(query, update);
+
+        res.send({ updatedCount: result.modifiedCount });
+      } catch (error) {
+        console.error('Error updating donation status:', error);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+
+    // Update donation request by ID
+    app.patch('/donationRequests/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        console.log('Received ID:', id);
+    
+        const updatedData = req.body;
+        console.log('Updated Data:', updatedData);
+    
+        const result = await requestsCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedData });
+        console.log('Update Result:', result);
+    
+        res.json({ updatedCount: result.modifiedCount });
+      } catch (error) {
+        console.error('Error updating donation request:', error);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+      }
+    });
+    
 
     app.post('/donationRequests', async (req, res) => {
       try {
