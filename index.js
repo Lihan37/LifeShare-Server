@@ -14,6 +14,43 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+// middleware
+const verifyToken = (req, res, next) => {
+  console.log('inside verified token', req.headers.authorization);
+
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: 'unauthorized access' });
+  }
+
+  const token = req.headers.authorization.split(' ')[1];
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).send({ message: 'forbidden access' });
+    }
+    req.decoded = decoded;
+    next();
+  })
+
+}
+
+// verify admin
+// middleware
+const verifyAdmin = async (req, res, next) => {
+
+  if (req.path === '/blogs' && req.method === 'POST') {
+
+    return next();
+  }
+
+  const email = req.decoded?.email;
+  const query = { email: email };
+  const user = await usersCollection.findOne(query);
+  const isAdmin = user?.role === 'admin';
+  if (!isAdmin) {
+    return res.status(403).send({ message: 'forbidden access' });
+  }
+  next();
+};
 
 
 
@@ -28,14 +65,95 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
-
+const usersCollection = client.db("lifeDb").collection("users");
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
-    const usersCollection = client.db("lifeDb").collection("users");
+
     const requestsCollection = client.db("lifeDb").collection("donationRequests");
+    const blogsCollection = client.db("lifeDb").collection("blogs");
+
+
+    // Add the following inside your run() function
+
+    // blogs related api
+
+    app.post('/blogs', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const { title, thumbnail, content } = req.body;
+
+        const newBlog = {
+          title,
+          thumbnail,
+          content,
+          status: 'draft', // Default status is draft
+        };
+
+        const result = await blogsCollection.insertOne(newBlog);
+
+        res.status(201).json({ success: true, message: 'Blog created successfully', blogId: result.insertedId });
+      } catch (error) {
+        console.error('Error creating blog:', error);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+      }
+    });
+
+
+    app.get('/blogs', async (req, res) => {
+      try {
+        const blogs = await blogsCollection.find().toArray();
+        console.log('Blogs:', blogs); // Log the retrieved data
+        res.status(200).json(blogs);
+      } catch (error) {
+        console.error('Error fetching blogs:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+
+    // Add the following inside your run() function
+
+    app.put('/blogs/:id/publish', verifyToken, verifyAdmin, async (req, res) => {
+      const blogId = req.params.id;
+
+      try {
+        const result = await blogsCollection.updateOne({ _id: new ObjectId(blogId) }, { $set: { status: 'published' } });
+
+        res.json({ updatedCount: result.modifiedCount });
+      } catch (error) {
+        console.error('Error publishing blog:', error);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+
+    app.put('/blogs/:id/unpublish', verifyToken, verifyAdmin, async (req, res) => {
+      const blogId = req.params.id;
+
+      try {
+        const result = await blogsCollection.updateOne({ _id: new ObjectId(blogId) }, { $set: { status: 'draft' } });
+
+        res.json({ updatedCount: result.modifiedCount });
+      } catch (error) {
+        console.error('Error unpublishing blog:', error);
+        res.status(500).send('Internal Server Error');
+      }
+    });
+
+
+    app.delete('/blogs/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const blogId = req.params.id;
+
+      try {
+        const result = await blogsCollection.deleteOne({ _id: new ObjectId(blogId) });
+
+        res.json({ deletedCount: result.deletedCount });
+      } catch (error) {
+        console.error('Error deleting blog:', error);
+        res.status(500).send('Internal Server Error');
+      }
+    });
 
 
 
@@ -55,10 +173,10 @@ async function run() {
       try {
         const userEmail = req.query.userEmail;
 
-        // Fetch all donation requests if userEmail is not provided
+
         const query = userEmail ? { requesterEmail: userEmail } : {};
 
-        // Fetch donation requests based on the query
+
         const result = await requestsCollection.find(query).toArray();
 
         console.log('Donation requests:', result);
@@ -98,29 +216,53 @@ async function run() {
     });
 
 
-    // Update donation request by ID
+
     app.patch('/donationRequests/:id', async (req, res) => {
       try {
         const id = req.params.id;
         console.log('Received ID:', id);
-    
+
         const updatedData = req.body;
         console.log('Updated Data:', updatedData);
-    
+
         const result = await requestsCollection.updateOne({ _id: new ObjectId(id) }, { $set: updatedData });
         console.log('Update Result:', result);
-    
+
         res.json({ updatedCount: result.modifiedCount });
       } catch (error) {
         console.error('Error updating donation request:', error);
         res.status(500).json({ success: false, error: 'Internal server error' });
       }
     });
-    
+
+    const { ObjectId } = require('mongodb');
+
+
+
+    app.get('/donationRequests/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const donationRequest = await requestsCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!donationRequest) {
+          res.status(404).json({ error: 'Donation request not found' });
+          return;
+        }
+
+        res.json(donationRequest);
+      } catch (error) {
+        console.error('Error fetching donation details:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
+
+
+
+
 
     app.post('/donationRequests', async (req, res) => {
       try {
-
         const {
           requesterName,
           requesterEmail,
@@ -134,6 +276,7 @@ async function run() {
           requestMessage,
           donationStatus,
         } = req.body;
+
 
 
         const newDonationRequest = {
@@ -150,7 +293,6 @@ async function run() {
           donationStatus,
         };
 
-
         await requestsCollection.insertOne(newDonationRequest);
 
         res.json({ success: true, message: 'Donation request created successfully' });
@@ -160,36 +302,9 @@ async function run() {
       }
     });
 
-    // middleware
-    const verifyToken = (req, res, next) => {
-      console.log('inside verified token', req.headers.authorization);
 
-      if (!req.headers.authorization) {
-        return res.status(401).send({ message: 'unauthorized access' });
-      }
 
-      const token = req.headers.authorization.split(' ')[1];
-      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
-        if (err) {
-          return res.status(401).send({ message: 'forbidden access' });
-        }
-        req.decoded = decoded;
-        next();
-      })
 
-    }
-
-    // verify admin
-    const verifyAdmin = async (req, res, next) => {
-      const email = req.decoded?.email;
-      const query = { email: email };
-      const user = await usersCollection.findOne(query);
-      const isAdmin = user?.role === 'admin';
-      if (!isAdmin) {
-        return res.status(403).send({ message: 'forbidden access' });
-      }
-      next();
-    }
 
     //user related api
 
@@ -214,22 +329,108 @@ async function run() {
       }
       res.send({ admin });
     })
+    app.get('/users/volunteer/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+
+
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: 'Forbidden access' });
+      }
+
+
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
+
+      let volunteer = false;
+
+
+      if (user) {
+        volunteer = user?.role === 'volunteer';
+      }
+
+
+      res.send({ volunteer });
+    });
+
+
+    app.get('/users/:email', verifyToken, async (req, res) => {
+      const userEmail = req.params.email;
+
+      try {
+        const user = await usersCollection.findOne({ email: userEmail });
+
+        if (user) {
+          console.log('User Data from Database:', user);
+
+          res.send({
+            name: user.name,
+            email: user.email,
+            avatar: user.avatar,
+            bloodGroup: user.bloodGroup,
+            district: user.district,
+            upazila: user.upazila,
+
+          });
+        } else {
+          console.log('User not found');
+          res.status(404).send({ message: 'User not found' });
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
+
+
+
+
 
 
     app.post('/users', async (req, res) => {
-      const user = req.body;
+      try {
+        const {
+          name,
+          email,
+          avatar,
+          bloodGroup,
+          district,
+          upazila,
+          password,
+        } = req.body;
 
-      user.status = 'active';
+        // Check if the user already exists
+        const existingUser = await usersCollection.findOne({ email });
 
-      const query = { email: user.email };
-      const existingUser = await usersCollection.findOne(query);
+        if (existingUser) {
+          return res.send({ message: 'User already exists', insertedId: null });
+        }
 
-      if (existingUser) {
-        return res.send({ message: 'user already exists', insertedId: null });
+        // Create a new user object
+        const user = {
+          name: req.body.name,
+          email: req.body.email,
+          avatar: req.body.avatar, // Make sure this field is correct
+          bloodGroup: req.body.bloodGroup,
+          district: req.body.district,
+          upazila: req.body.upazila,
+          // Include other fields as needed
+          status: 'active',
+        };
+
+        // Insert the user into the database
+        const result = await usersCollection.insertOne(user);
+
+        if (result.insertedId) {
+          console.log('User added successfully');
+          res.send({ message: 'User added successfully', insertedId: result.insertedId });
+        } else {
+          console.log('Failed to add user');
+          res.status(500).send({ message: 'Failed to add user', insertedId: null });
+        }
+      } catch (error) {
+        console.error('Error in registration route:', error);
+        res.status(500).send({ message: 'Internal server error', insertedId: null });
       }
-
-      const result = await usersCollection.insertOne(user);
-      res.send(result);
     });
 
     app.patch('/users/admin/block/:id', verifyToken, verifyAdmin, async (req, res) => {
@@ -272,6 +473,31 @@ async function run() {
     });
 
 
+    app.patch('/users/volunteer/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          role: 'volunteer'
+        }
+      };
+
+      try {
+        const result = await usersCollection.updateOne(filter, updatedDoc);
+
+        if (result.modifiedCount > 0) {
+          const user = await usersCollection.findOne(filter);
+          res.send({ message: 'User is now a Volunteer', role: user.role });
+        } else {
+          res.status(404).send({ message: 'User not found' });
+        }
+      } catch (error) {
+        console.error('Error making user a volunteer:', error);
+        res.status(500).send({ message: 'Internal server error' });
+      }
+    });
+
+
 
 
 
@@ -294,7 +520,6 @@ async function run() {
       const result = await usersCollection.deleteOne(query);
       res.send(result);
     })
-
 
 
     // Send a ping to confirm a successful connection
